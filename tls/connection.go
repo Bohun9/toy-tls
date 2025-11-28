@@ -3,6 +3,7 @@ package tls
 import (
 	"bytes"
 	"crypto/ecdh"
+	"crypto/x509"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +18,7 @@ type Conn struct {
 	privKey     *ecdh.PrivateKey
 	clientHello *clientHello
 	serverHello *serverHello
+	serverCert  *x509.Certificate
 	hsKeys      trafficKeys
 	appKeys     trafficKeys
 	appDataBuf  bytes.Buffer
@@ -154,8 +156,14 @@ func (conn *Conn) receiveCertificate() error {
 		return fmt.Errorf("parse Certificate: %w", err)
 	}
 
+	chain, err := validateCertificateChain(certs, conn.clientHello.hostname)
+	if err != nil {
+		return fmt.Errorf("invalid Certificate: %w", err)
+	}
+	conn.serverCert = chain[0]
+
 	conn.addToTranscript(record.payload)
-	logger.Printf("Server Certificate received (%v bytes)\n\n", len(certs))
+	logger.Printf("Server Certificate received and validated:\n%v\n\n", formatCertificateChain(chain))
 	return nil
 }
 
@@ -171,8 +179,12 @@ func (conn *Conn) receiveCertificateVerify() error {
 		return fmt.Errorf("parse Certificate Verify: %w", err)
 	}
 
+	if err := verifyCertificateVerify(certVerify, conn.serverCert, conn.transcript); err != nil {
+		return fmt.Errorf("invalid Certificate Verify: %w", err)
+	}
+
 	conn.addToTranscript(record.payload)
-	logger.Printf("Server Certificate Verify received (%v bytes)\n\n", len(certVerify))
+	logger.Printf("Server Certificate Verify received and verified:\n%v\n\n", certVerify)
 	return nil
 }
 
@@ -185,16 +197,15 @@ func (conn *Conn) receiveServerFinished() error {
 	record := conn.decryptHandshakeRecord(wrapper)
 	serverFinished, err := parseServerFinished(record.payload)
 	if err != nil {
-		return fmt.Errorf("parse Certificate Verify: %w", err)
+		return fmt.Errorf("parse Server Finished: %w", err)
 	}
 
-	clientVerifyData := computeFinishedData(conn.hsKeys.server.finished, conn.transcript)
-	if !bytes.Equal(serverFinished.verifyData, clientVerifyData) {
-		return fmt.Errorf("invalid server finished data")
+	if err := serverFinished.verify(conn.hsKeys.server.finished, conn.transcript); err != nil {
+		return fmt.Errorf("invalid Server Finished: %w", err)
 	}
 
 	conn.addToTranscript(record.payload)
-	logger.Printf("Server Finished received and validated:\n%v\n\n", serverFinished)
+	logger.Printf("Server Finished received and verified:\n%v\n\n", serverFinished)
 	return nil
 }
 

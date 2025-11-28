@@ -2,6 +2,7 @@ package tls
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -76,14 +77,14 @@ func readVector(r io.Reader, lenBytes int) []byte {
 
 func parseServerHello(msg []byte) (*serverHello, error) {
 	r := bytes.NewReader(msg)
-	serverHello := &serverHello{}
+	sh := &serverHello{}
 
-	skipBytes(r, 4)                         // header
-	skipBytes(r, 2)                         // legacy_version
-	serverHello.random = readBytes(r, 32)   // random
-	readVector(r, 1)                        // legacy_session_id_echo
-	serverHello.cipherSuite = readUint16(r) // cipher_suite
-	skipBytes(r, 1)                         // legacy_compression_method
+	skipBytes(r, 4)                // header
+	skipBytes(r, 2)                // legacy_version
+	sh.random = readBytes(r, 32)   // random
+	readVector(r, 1)               // legacy_session_id_echo
+	sh.cipherSuite = readUint16(r) // cipher_suite
+	skipBytes(r, 1)                // legacy_compression_method
 	extensions := bytes.NewReader(readVector(r, 2))
 
 	for extensions.Len() > 0 {
@@ -92,14 +93,14 @@ func parseServerHello(msg []byte) (*serverHello, error) {
 
 		switch extType {
 		case extensionTypeKeyShare:
-			serverHello.group = readUint16(extData)
-			serverHello.pubBytes = readVector(extData, 2)
+			sh.group = readUint16(extData)
+			sh.pubBytes = readVector(extData, 2)
 		case extensionTypeSupportedVersions:
-			serverHello.version = readUint16(extData)
+			sh.version = readUint16(extData)
 		}
 	}
 
-	return serverHello, nil
+	return sh, nil
 }
 
 func parseEncryptedExtensions(msg []byte) ([]byte, error) {
@@ -108,18 +109,54 @@ func parseEncryptedExtensions(msg []byte) ([]byte, error) {
 	return readVector(r, 2), nil
 }
 
-func parseCertificate(msg []byte) ([]byte, error) {
+func parseCertificate(msg []byte) ([]*x509.Certificate, error) {
 	r := bytes.NewReader(msg)
+
 	skipBytes(r, 4)
-	readVector(r, 1)             // request context
-	return readVector(r, 3), nil // certificates entries
+	readVector(r, 1)                              // request_context
+	certList := bytes.NewReader(readVector(r, 3)) // certificate_list
+
+	var certs []*x509.Certificate
+
+	for certList.Len() > 0 {
+		der := readVector(certList, 3)
+		readVector(certList, 2) // extensions
+
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+
+	return certs, nil
 }
 
-func parseCertificateVerify(msg []byte) ([]byte, error) {
+type certificateVerify struct {
+	algorithm uint16
+	signature []byte
+}
+
+func (cv *certificateVerify) String() string {
+	return fmt.Sprintf(
+		`certificateVerfiy{
+    algorithm: 0x%04x
+    signature: %x
+}`,
+		cv.algorithm,
+		cv.signature,
+	)
+}
+
+func parseCertificateVerify(msg []byte) (*certificateVerify, error) {
 	r := bytes.NewReader(msg)
+	cv := &certificateVerify{}
+
 	skipBytes(r, 4)
-	skipBytes(r, 2) // signature scheme
-	return readVector(r, 2), nil
+	cv.algorithm = readUint16(r)
+	cv.signature = readVector(r, 2)
+
+	return cv, nil
 }
 
 type serverFinished struct {
@@ -136,10 +173,18 @@ func (sf *serverFinished) String() string {
 
 func parseServerFinished(msg []byte) (*serverFinished, error) {
 	r := bytes.NewReader(msg)
-	serverFinished := &serverFinished{}
+	sf := &serverFinished{}
 
 	skipBytes(r, 4)
-	serverFinished.verifyData = readBytes(r, hashLen)
+	sf.verifyData = readBytes(r, hashLen)
 
-	return serverFinished, nil
+	return sf, nil
+}
+
+func (sf *serverFinished) verify(finishedKey []byte, transcript []byte) error {
+	expected := computeFinishedData(finishedKey, transcript)
+	if !bytes.Equal(sf.verifyData, expected) {
+		return fmt.Errorf("bad verify data")
+	}
+	return nil
 }

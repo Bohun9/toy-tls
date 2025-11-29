@@ -39,8 +39,11 @@ func (r *record) marshal() []byte {
 	return buf
 }
 
-func (r *record) decrypt(keys *encryptionKeys) *record {
-	innerPlaintext := keys.decrypt(r.fragment, r.header())
+func (r *record) decrypt(keys *encryptionKeys) (*record, error) {
+	innerPlaintext, err := keys.decrypt(r.fragment, r.header())
+	if err != nil {
+		return nil, err
+	}
 
 	typeIndex := len(innerPlaintext) - 1
 	for typeIndex > 0 && innerPlaintext[typeIndex] == 0 {
@@ -50,7 +53,7 @@ func (r *record) decrypt(keys *encryptionKeys) *record {
 	return &record{
 		contentType: innerPlaintext[typeIndex],
 		fragment:    innerPlaintext[:typeIndex],
-	}
+	}, nil
 }
 
 func (r *record) encrypt(keys *encryptionKeys) *record {
@@ -119,7 +122,7 @@ func (rl *recordLayerImpl) readRecord() (*record, error) {
 	if rl.readKeys == nil || record.contentType == contentTypeChangeCipherSpec {
 		return record, nil
 	} else {
-		return record.decrypt(rl.readKeys), nil
+		return record.decrypt(rl.readKeys)
 	}
 }
 

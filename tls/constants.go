@@ -6,10 +6,12 @@ const (
 
 	contentTypeHandshake        uint8 = 0x16
 	contentTypeChangeCipherSpec uint8 = 0x14
+	contentTypeAlert            uint8 = 0x15
 	contentTypeApplicationData  uint8 = 0x17
 
-	handshakeTypeClientHello uint8 = 0x01
-	handshakeTypeFinished    uint8 = 0x14
+	handshakeTypeClientHello      uint8 = 0x01
+	handshakeTypeNewSessionTicket uint8 = 0x04
+	handshakeTypeFinished         uint8 = 0x14
 
 	extensionTypeServerName          uint16 = 0x0000
 	extensionTypeSupportedVersions   uint16 = 0x002b

@@ -154,7 +154,7 @@ func (cf *clientFinished) String() string {
 
 func newClientFinished(key []byte, transcript []byte) *clientFinished {
 	return &clientFinished{
-		verifyData: computeFinishedData(key, transcript),
+		verifyData: computeVerifyData(key, transcript),
 	}
 }
 

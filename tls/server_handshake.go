@@ -75,8 +75,8 @@ func readVector(r io.Reader, lenBytes int) []byte {
 	return readBytes(r, length)
 }
 
-func parseServerHello(msg []byte) (*serverHello, error) {
-	r := bytes.NewReader(msg)
+func parseServerHello(content []byte) (*serverHello, error) {
+	r := bytes.NewReader(content)
 	sh := &serverHello{}
 
 	skipBytes(r, 4)                // header
@@ -103,14 +103,14 @@ func parseServerHello(msg []byte) (*serverHello, error) {
 	return sh, nil
 }
 
-func parseEncryptedExtensions(msg []byte) ([]byte, error) {
-	r := bytes.NewReader(msg)
+func parseEncryptedExtensions(content []byte) ([]byte, error) {
+	r := bytes.NewReader(content)
 	skipBytes(r, 4)
 	return readVector(r, 2), nil
 }
 
-func parseCertificate(msg []byte) ([]*x509.Certificate, error) {
-	r := bytes.NewReader(msg)
+func parseCertificate(content []byte) ([]*x509.Certificate, error) {
+	r := bytes.NewReader(content)
 
 	skipBytes(r, 4)
 	readVector(r, 1)                              // request_context
@@ -148,8 +148,8 @@ func (cv *certificateVerify) String() string {
 	)
 }
 
-func parseCertificateVerify(msg []byte) (*certificateVerify, error) {
-	r := bytes.NewReader(msg)
+func parseCertificateVerify(content []byte) (*certificateVerify, error) {
+	r := bytes.NewReader(content)
 	cv := &certificateVerify{}
 
 	skipBytes(r, 4)
@@ -171,8 +171,8 @@ func (sf *serverFinished) String() string {
 		sf.verifyData)
 }
 
-func parseServerFinished(msg []byte) (*serverFinished, error) {
-	r := bytes.NewReader(msg)
+func parseServerFinished(content []byte) (*serverFinished, error) {
+	r := bytes.NewReader(content)
 	sf := &serverFinished{}
 
 	skipBytes(r, 4)
@@ -182,7 +182,7 @@ func parseServerFinished(msg []byte) (*serverFinished, error) {
 }
 
 func (sf *serverFinished) verify(finishedKey []byte, transcript []byte) error {
-	expected := computeFinishedData(finishedKey, transcript)
+	expected := computeVerifyData(finishedKey, transcript)
 	if !bytes.Equal(sf.verifyData, expected) {
 		return fmt.Errorf("bad verify data")
 	}

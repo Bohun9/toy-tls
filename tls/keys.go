@@ -58,15 +58,11 @@ func xorNonce(iv []byte, seq uint64) []byte {
 	return nonce
 }
 
-func (ek *encryptionKeys) decrypt(ciphertext []byte, ad []byte) []byte {
+func (ek *encryptionKeys) decrypt(ciphertext []byte, ad []byte) ([]byte, error) {
 	nonce := xorNonce(ek.iv, ek.seq)
 	ek.seq++
 
-	plaintext, err := decrypt(ek.key, nonce, ciphertext, ad)
-	if err != nil {
-		panic(err)
-	}
-	return plaintext
+	return decrypt(ek.key, nonce, ciphertext, ad)
 }
 
 func (ek *encryptionKeys) encrypt(plaintext []byte, ad []byte) []byte {
@@ -197,7 +193,7 @@ func encrypt(key []byte, nonce []byte, plaintext []byte, ad []byte) []byte {
 	return aes128gcmsha256(key).Seal(nil, nonce, plaintext, ad)
 }
 
-func computeFinishedData(key []byte, transcript []byte) []byte {
+func computeVerifyData(key []byte, transcript []byte) []byte {
 	transcriptHash := sha256.Sum256(transcript)
 
 	mac := hmac.New(sha256.New, key)

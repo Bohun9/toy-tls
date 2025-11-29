@@ -25,11 +25,11 @@ type messageLayer interface {
 }
 
 type messageLayerImpl struct {
-	recordLayer *recordLayerImpl
+	recordLayer recordLayer
 	fragmentBuf bytes.Buffer // only handshake messages can be fragmented
 }
 
-func newMessageLayerImpl(rl *recordLayerImpl) *messageLayerImpl {
+func newMessageLayerImpl(rl recordLayer) *messageLayerImpl {
 	return &messageLayerImpl{
 		recordLayer: rl,
 	}

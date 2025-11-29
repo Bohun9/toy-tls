@@ -29,24 +29,24 @@ func generateNewPrivateKey() *ecdh.PrivateKey {
 	return privKey
 }
 
-type writeKeys struct {
+type encryptionKeys struct {
 	key      []byte
 	iv       []byte
 	finished []byte
 	seq      uint64
 }
 
-func (wk *writeKeys) String() string {
-	return fmt.Sprintf(`WriteKeys {
+func (ek *encryptionKeys) String() string {
+	return fmt.Sprintf(`encryptionKeys {
                 key:      %x
                 iv:       %x
                 finished: %x
                 seq:      %d
             }`,
-		wk.key,
-		wk.iv,
-		wk.finished,
-		wk.seq,
+		ek.key,
+		ek.iv,
+		ek.finished,
+		ek.seq,
 	)
 }
 
@@ -58,28 +58,28 @@ func xorNonce(iv []byte, seq uint64) []byte {
 	return nonce
 }
 
-func (wk *writeKeys) decrypt(ciphertext []byte, ad []byte) []byte {
-	nonce := xorNonce(wk.iv, wk.seq)
-	wk.seq++
+func (ek *encryptionKeys) decrypt(ciphertext []byte, ad []byte) []byte {
+	nonce := xorNonce(ek.iv, ek.seq)
+	ek.seq++
 
-	plaintext, err := decrypt(wk.key, nonce, ciphertext, ad)
+	plaintext, err := decrypt(ek.key, nonce, ciphertext, ad)
 	if err != nil {
 		panic(err)
 	}
 	return plaintext
 }
 
-func (wk *writeKeys) encrypt(plaintext []byte, ad []byte) []byte {
-	nonce := xorNonce(wk.iv, wk.seq)
-	wk.seq++
+func (ek *encryptionKeys) encrypt(plaintext []byte, ad []byte) []byte {
+	nonce := xorNonce(ek.iv, ek.seq)
+	ek.seq++
 
-	return encrypt(wk.key, nonce, plaintext, ad)
+	return encrypt(ek.key, nonce, plaintext, ad)
 }
 
 type trafficKeys struct {
 	secret []byte
-	client writeKeys
-	server writeKeys
+	client encryptionKeys
+	server encryptionKeys
 }
 
 func (tk trafficKeys) String() string {
@@ -120,12 +120,12 @@ func deriveSecret(secret []byte, label string, transcript []byte) []byte {
 	return hkdfExpandLabel(secret, label, transcriptHash[:], hashLen)
 }
 
-func deriveWriteKeys(secret []byte) writeKeys {
+func deriveWriteKeys(secret []byte) encryptionKeys {
 	key := hkdfExpandLabel(secret, "key", nil, keyLen)
 	iv := hkdfExpandLabel(secret, "iv", nil, ivLen)
 	fin := hkdfExpandLabel(secret, "finished", nil, hashLen)
 
-	return writeKeys{
+	return encryptionKeys{
 		key:      key,
 		iv:       iv,
 		finished: fin,

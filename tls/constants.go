@@ -4,9 +4,9 @@ const (
 	tlsVersion12 uint16 = 0x0303
 	tlsVersion13 uint16 = 0x0304
 
-	recordTypeHandshake        uint8 = 0x16
-	recordTypeChangeCipherSpec uint8 = 0x14
-	recordTypeApplicationData  uint8 = 0x17
+	contentTypeHandshake        uint8 = 0x16
+	contentTypeChangeCipherSpec uint8 = 0x14
+	contentTypeApplicationData  uint8 = 0x17
 
 	handshakeTypeClientHello uint8 = 0x01
 	handshakeTypeFinished    uint8 = 0x14
@@ -24,4 +24,8 @@ const (
 	secp256r1 uint16 = 0x0017
 
 	nullCompressionMethod uint8 = 0x00
+
+	maxRecordSize = 1 << 14
+
+	handshakeHeaderSize = 4
 )

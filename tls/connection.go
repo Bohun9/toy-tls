@@ -12,16 +12,25 @@ import (
 
 var logger = log.New(os.Stderr, "[ TLS ] ", log.LstdFlags)
 
-type Conn struct {
-	rawConn     net.Conn
+type handshakeState struct {
+	hostname    string
 	transcript  []byte
 	privKey     *ecdh.PrivateKey
-	clientHello *clientHello
+	keys        trafficKeys
 	serverHello *serverHello
 	serverCert  *x509.Certificate
-	hsKeys      trafficKeys
-	appKeys     trafficKeys
-	appDataBuf  bytes.Buffer
+}
+
+func (s *handshakeState) addToTranscript(msg *message) {
+	s.transcript = append(s.transcript, msg.content...)
+}
+
+type Conn struct {
+	rawConn        net.Conn
+	handshakeState *handshakeState
+	appDataBuf     bytes.Buffer
+	messageLayer   messageLayer
+	recordLayer    recordLayer
 }
 
 func Dial(network string, hostname string, port int) (*Conn, error) {
@@ -31,11 +40,15 @@ func Dial(network string, hostname string, port int) (*Conn, error) {
 		return nil, err
 	}
 
-	privKey := generateNewPrivateKey()
+	recordLayer := newRecordLayerImpl(raw)
 	conn := &Conn{
-		rawConn:     raw,
-		privKey:     privKey,
-		clientHello: newClientHello(hostname, privKey),
+		rawConn: raw,
+		handshakeState: &handshakeState{
+			hostname: hostname,
+			privKey:  generateNewPrivateKey(),
+		},
+		messageLayer: newMessageLayerImpl(recordLayer),
+		recordLayer:  recordLayer,
 	}
 
 	if err := conn.handshake(); err != nil {
@@ -46,274 +59,246 @@ func Dial(network string, hostname string, port int) (*Conn, error) {
 	return conn, nil
 }
 
-func (conn *Conn) readRecord() (*record, error) {
-	return readRecord(conn.rawConn)
-}
-
-func (conn *Conn) sendRecord(record *record) error {
-	_, err := conn.rawConn.Write(record.marshal())
+func (c *Conn) readMessage() (*message, error) {
+	msg, err := c.messageLayer.readMessage()
 	if err != nil {
-		return fmt.Errorf("send TLS record: %w", err)
+		return nil, fmt.Errorf("read message: %w", err)
 	}
-	return nil
+	return msg, nil
 }
 
-func (conn *Conn) addToTranscript(msg []byte) {
-	conn.transcript = append(conn.transcript, msg...)
+func (c *Conn) sendMessage(msg *message) (int, error) {
+	return c.messageLayer.writeMessage(msg)
 }
 
-func (conn *Conn) sendClientHello() error {
-	clientHelloBytes := conn.clientHello.marshal()
+func (c *Conn) addToTranscript(msg *message) {
+	c.handshakeState.addToTranscript(msg)
+}
 
-	if err := conn.sendRecord(newRecord(recordTypeHandshake, clientHelloBytes)); err != nil {
+func (c *Conn) sendClientHello() error {
+	clientHello := newClientHello(c.handshakeState.hostname, c.handshakeState.privKey)
+	msg := clientHello.marshal()
+
+	if _, err := c.sendMessage(msg); err != nil {
 		return fmt.Errorf("send Client Hello: %w", err)
 	}
 
-	conn.addToTranscript(clientHelloBytes)
-	logger.Printf("Client Hello sent:\n%v\n\n", conn.clientHello)
+	c.addToTranscript(msg)
+	logger.Printf("Client Hello sent:\n%v\n\n", clientHello)
 	return nil
 }
 
-func (conn *Conn) receiveServerHello() error {
-	record, err := conn.readRecord()
+func (c *Conn) receiveServerHello() error {
+	msg, err := c.readMessage()
 	if err != nil {
 		return fmt.Errorf("read Server Hello: %w", err)
 	}
-	if record.typ != recordTypeHandshake {
-		return fmt.Errorf("received record type %d, expected %d (handshake)", record.typ, recordTypeHandshake)
+	if msg.contentType != contentTypeHandshake {
+		return fmt.Errorf("received content type %d, expected handshake", msg.contentType)
 	}
 
-	serverHello, err := parseServerHello(record.payload)
+	serverHello, err := parseServerHello(msg.content)
 	if err != nil {
 		return fmt.Errorf("parse Server Hello: %w", err)
 	}
-	conn.serverHello = serverHello
+	c.handshakeState.serverHello = serverHello
 
-	conn.addToTranscript(record.payload)
+	c.addToTranscript(msg)
 	logger.Printf("Server Hello received:\n%s\n\n", serverHello)
 	return nil
 }
 
-func (conn *Conn) calculateHandshakeKeys() {
-	conn.hsKeys = computeHandshakeKeys(conn.privKey, conn.serverHello.pubBytes, conn.transcript)
-	logger.Printf("Handshake keys calculated:\n%v\n\n", conn.hsKeys)
+func (c *Conn) calculateHandshakeKeys() {
+	hsKeys := computeHandshakeKeys(c.handshakeState.privKey, c.handshakeState.serverHello.pubBytes, c.handshakeState.transcript)
+	c.recordLayer.updateKeys(&hsKeys)
+
+	c.handshakeState.keys = hsKeys
+	logger.Printf("Handshake keys calculated:\n%v\n\n", hsKeys)
 }
 
-func (conn *Conn) calculateApplicationKeys() {
-	conn.appKeys = computeApplicationKeys(conn.hsKeys.secret, conn.transcript)
-	logger.Printf("Application keys calculated:\n%v\n\n", conn.appKeys)
+func (c *Conn) calculateApplicationKeys() {
+	appKeys := computeApplicationKeys(c.handshakeState.keys.secret, c.handshakeState.transcript)
+	c.recordLayer.updateKeys(&appKeys)
+
+	logger.Printf("Application keys calculated:\n%v\n\n", appKeys)
 }
 
-func (conn *Conn) decryptHandshakeRecord(record *record) *record {
-	return record.decrypt(&conn.hsKeys.server)
-}
-
-func (conn *Conn) decryptApplicationRecord(record *record) *record {
-	return record.decrypt(&conn.appKeys.server)
-}
-
-func (conn *Conn) encryptHandshakeRecord(payload []byte) *record {
-	return newRecord(recordTypeHandshake, payload).encrypt(&conn.hsKeys.client)
-}
-
-func (conn *Conn) encryptApplicationRecord(payload []byte) *record {
-	return newRecord(recordTypeApplicationData, payload).encrypt(&conn.appKeys.client)
-}
-
-func (conn *Conn) receiveEncryptedExtensions() error {
-	wrapper, err := conn.readRecord()
+func (c *Conn) receiveEncryptedExtensions() error {
+	msg, err := c.readMessage()
 	if err != nil {
 		return fmt.Errorf("read Encrypted Extensions: %w", err)
 	}
-	if wrapper.typ == recordTypeChangeCipherSpec {
+	if msg.contentType == contentTypeChangeCipherSpec {
 		logger.Printf("Server Change Cipher Spec received\n\n")
-		wrapper, err = conn.readRecord()
+		msg, err = c.readMessage()
 		if err != nil {
 			return fmt.Errorf("read Encrypted Extensions: %w", err)
 		}
 	}
 
-	record := conn.decryptHandshakeRecord(wrapper)
-	extensions, err := parseEncryptedExtensions(record.payload)
+	extensions, err := parseEncryptedExtensions(msg.content)
 	if err != nil {
 		return fmt.Errorf("parse Encrypted Extensions: %w", err)
 	}
 
-	conn.addToTranscript(record.payload)
+	c.addToTranscript(msg)
 	logger.Printf("Encrypted Extensions received (%v bytes)\n\n", len(extensions))
 	return nil
 }
 
-func (conn *Conn) receiveCertificate() error {
-	wrapper, err := conn.readRecord()
+func (c *Conn) receiveCertificate() error {
+	msg, err := c.readMessage()
 	if err != nil {
 		return fmt.Errorf("read Certificate: %w", err)
 	}
 
-	record := conn.decryptHandshakeRecord(wrapper)
-	certs, err := parseCertificate(record.payload)
+	certs, err := parseCertificate(msg.content)
 	if err != nil {
 		return fmt.Errorf("parse Certificate: %w", err)
 	}
 
-	chain, err := validateCertificateChain(certs, conn.clientHello.hostname)
+	chain, err := validateCertificateChain(certs, c.handshakeState.hostname)
 	if err != nil {
 		return fmt.Errorf("invalid Certificate: %w", err)
 	}
-	conn.serverCert = chain[0]
+	c.handshakeState.serverCert = chain[0]
 
-	conn.addToTranscript(record.payload)
+	c.addToTranscript(msg)
 	logger.Printf("Server Certificate received and validated:\n%v\n\n", formatCertificateChain(chain))
 	return nil
 }
 
-func (conn *Conn) receiveCertificateVerify() error {
-	wrapper, err := conn.readRecord()
+func (c *Conn) receiveCertificateVerify() error {
+	msg, err := c.readMessage()
 	if err != nil {
 		return fmt.Errorf("read Certificate Verify: %w", err)
 	}
 
-	record := conn.decryptHandshakeRecord(wrapper)
-	certVerify, err := parseCertificateVerify(record.payload)
+	certVerify, err := parseCertificateVerify(msg.content)
 	if err != nil {
 		return fmt.Errorf("parse Certificate Verify: %w", err)
 	}
 
-	if err := verifyCertificateVerify(certVerify, conn.serverCert, conn.transcript); err != nil {
+	if err := verifyCertificateVerify(certVerify, c.handshakeState.serverCert, c.handshakeState.transcript); err != nil {
 		return fmt.Errorf("invalid Certificate Verify: %w", err)
 	}
 
-	conn.addToTranscript(record.payload)
+	c.addToTranscript(msg)
 	logger.Printf("Server Certificate Verify received and verified:\n%v\n\n", certVerify)
 	return nil
 }
 
-func (conn *Conn) receiveServerFinished() error {
-	wrapper, err := conn.readRecord()
+func (c *Conn) receiveServerFinished() error {
+	msg, err := c.readMessage()
 	if err != nil {
 		return fmt.Errorf("read Server Finished: %w", err)
 	}
 
-	record := conn.decryptHandshakeRecord(wrapper)
-	serverFinished, err := parseServerFinished(record.payload)
+	serverFinished, err := parseServerFinished(msg.content)
 	if err != nil {
 		return fmt.Errorf("parse Server Finished: %w", err)
 	}
 
-	if err := serverFinished.verify(conn.hsKeys.server.finished, conn.transcript); err != nil {
+	if err := serverFinished.verify(c.handshakeState.keys.server.finished, c.handshakeState.transcript); err != nil {
 		return fmt.Errorf("invalid Server Finished: %w", err)
 	}
 
-	conn.addToTranscript(record.payload)
+	c.addToTranscript(msg)
 	logger.Printf("Server Finished received and verified:\n%v\n\n", serverFinished)
 	return nil
 }
 
-func (conn *Conn) sendClientFinished() error {
-	clientFinished := newClientFinished(conn.hsKeys.client.finished, conn.transcript)
+func (c *Conn) sendClientFinished() error {
+	clientFinished := newClientFinished(c.handshakeState.keys.client.finished, c.handshakeState.transcript)
+	msg := clientFinished.marshal()
 
-	wrapper := conn.encryptHandshakeRecord(clientFinished.marshal())
-	if err := conn.sendRecord(wrapper); err != nil {
-		return fmt.Errorf("send Client Fnished: %w", err)
+	if _, err := c.sendMessage(msg); err != nil {
+		return fmt.Errorf("send Client Finished: %w", err)
 	}
 
 	logger.Printf("Client Finished sent:\n%+v\n\n", clientFinished)
 	return nil
 }
 
-func (conn *Conn) handshake() error {
-	if err := conn.sendClientHello(); err != nil {
+func (c *Conn) handshake() error {
+	if err := c.sendClientHello(); err != nil {
 		return err
 	}
-	if err := conn.receiveServerHello(); err != nil {
-		return err
-	}
-
-	conn.calculateHandshakeKeys()
-
-	if err := conn.receiveEncryptedExtensions(); err != nil {
-		return err
-	}
-	if err := conn.receiveCertificate(); err != nil {
-		return err
-	}
-	if err := conn.receiveCertificateVerify(); err != nil {
-		return err
-	}
-	if err := conn.receiveServerFinished(); err != nil {
-		return err
-	}
-	if err := conn.sendClientFinished(); err != nil {
+	if err := c.receiveServerHello(); err != nil {
 		return err
 	}
 
-	conn.calculateApplicationKeys()
+	c.calculateHandshakeKeys()
+
+	if err := c.receiveEncryptedExtensions(); err != nil {
+		return err
+	}
+	if err := c.receiveCertificate(); err != nil {
+		return err
+	}
+	if err := c.receiveCertificateVerify(); err != nil {
+		return err
+	}
+	if err := c.receiveServerFinished(); err != nil {
+		return err
+	}
+	if err := c.sendClientFinished(); err != nil {
+		return err
+	}
+
+	c.calculateApplicationKeys()
 	return nil
 }
 
-func (conn *Conn) sendApplicationData(data []byte) error {
-	wrapper := conn.encryptApplicationRecord(data)
-	if err := conn.sendRecord(wrapper); err != nil {
-		return fmt.Errorf("send Application Data: %w", err)
+func (c *Conn) sendApplicationData(data []byte) (int, error) {
+	msg := newMessage(contentTypeApplicationData, data)
+
+	n, err := c.sendMessage(msg)
+	if err != nil {
+		return n, fmt.Errorf("send Application Data: %w", err)
 	}
 
 	logger.Printf("Application Data sent (%v bytes)\n\n", len(data))
-	return nil
+	return n, nil
 }
 
-func (conn *Conn) receiveApplicationData() ([]byte, error) {
-	wrapper, err := readRecord(conn.rawConn)
+func (c *Conn) receiveApplicationData() ([]byte, error) {
+	msg, err := c.readMessage()
 	if err != nil {
 		return nil, fmt.Errorf("read Application Data: %w", err)
 	}
 
-	record := conn.decryptApplicationRecord(wrapper)
-	switch record.typ {
-	case recordTypeApplicationData:
-		logger.Printf("Application Data received (%v bytes)\n\n", len(record.payload))
-		return record.payload, nil
+	switch msg.contentType {
+	case contentTypeApplicationData:
+		logger.Printf("Application Data received (%v bytes)\n\n", len(msg.content))
+		return msg.content, nil
 	default:
 		logger.Printf("New Session Ticket received\n\n")
 		return nil, nil
 	}
 }
 
-const writeChunkSize = 8 * 1024
-
-func (conn *Conn) Write(data []byte) (int, error) {
-	total := 0
-
-	for len(data) > 0 {
-		chunkSize := min(len(data), writeChunkSize)
-		if err := conn.sendApplicationData(data[:chunkSize]); err != nil {
-			return total, err
-		}
-		total += chunkSize
-		data = data[chunkSize:]
-	}
-
-	return total, nil
+func (c *Conn) Write(data []byte) (int, error) {
+	return c.sendApplicationData(data)
 }
 
-func (conn *Conn) Read(p []byte) (int, error) {
-	if conn.appDataBuf.Len() > 0 {
-		return conn.appDataBuf.Read(p)
-	}
-
-	var data []byte
-	var err error
-
-	for len(data) == 0 {
-		data, err = conn.receiveApplicationData()
-		if err != nil {
-			return 0, err
+func (c *Conn) Read(p []byte) (int, error) {
+	if c.appDataBuf.Len() == 0 {
+		for {
+			data, err := c.receiveApplicationData()
+			if err != nil {
+				return 0, err
+			}
+			if len(data) > 0 {
+				c.appDataBuf.Write(data)
+				break
+			}
 		}
 	}
 
-	conn.appDataBuf.Write(data)
-	return conn.appDataBuf.Read(p)
+	return c.appDataBuf.Read(p)
 }
 
-func (conn *Conn) Close() error {
-	return conn.rawConn.Close()
+func (c *Conn) Close() error {
+	return c.rawConn.Close()
 }

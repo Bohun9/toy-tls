@@ -5,7 +5,7 @@ import (
 	"github.com/Bohun9/toy-tls/tls"
 )
 
-const hostname = "www.example.com"
+const hostname = "www.google.com"
 
 func main() {
 	conn, err := tls.Dial("tcp", hostname, 443)

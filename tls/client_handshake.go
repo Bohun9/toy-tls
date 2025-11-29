@@ -103,19 +103,19 @@ func marshalExtension(extType uint16, data []byte) []byte {
 	return ext.Bytes()
 }
 
-func (ch *clientHello) marshal() []byte {
-	var msg bytes.Buffer
+func (ch *clientHello) marshal() *message {
+	var content bytes.Buffer
 
 	// handshake header
-	msg.WriteByte(handshakeTypeClientHello)
-	msg.Write([]byte{0x00, 0x00, 0x00}) // length placeholder
+	content.WriteByte(handshakeTypeClientHello)
+	content.Write([]byte{0x00, 0x00, 0x00}) // length placeholder
 
 	// client hello content
-	binary.Write(&msg, binary.BigEndian, tlsVersion12)                       // legacy_version
-	msg.Write(ch.random)                                                     // client_random
-	msg.Write(marshalVector(1, nil))                                         // legacy_session_id
-	msg.Write(marshalVector(2, marshalUint16List([]uint16{ch.cipherSuite}))) // cipher_suites
-	msg.Write(marshalVector(1, []byte{nullCompressionMethod}))               // legacy_compression_methods
+	binary.Write(&content, binary.BigEndian, tlsVersion12)                       // legacy_version
+	content.Write(ch.random)                                                     // client_random
+	content.Write(marshalVector(1, nil))                                         // legacy_session_id
+	content.Write(marshalVector(2, marshalUint16List([]uint16{ch.cipherSuite}))) // cipher_suites
+	content.Write(marshalVector(1, []byte{nullCompressionMethod}))               // legacy_compression_methods
 
 	// extensions
 	var exts bytes.Buffer
@@ -125,16 +125,19 @@ func (ch *clientHello) marshal() []byte {
 	exts.Write(marshalExtension(extensionTypeSupportedGroups, marshalVector(2, marshalUint16List([]uint16{ch.supportedGroup}))))
 	exts.Write(marshalExtension(extensionTypeKeyShare, marshalVector(2, keyShareEntry(ch.supportedGroup, ch.pubBytes))))
 
-	msg.Write(marshalVector(2, exts.Bytes()))
+	content.Write(marshalVector(2, exts.Bytes()))
 
 	// fill the length placeholder
-	data := msg.Bytes()
-	length := len(data) - 4
-	data[1] = byte(length >> 16)
-	data[2] = byte(length >> 8)
-	data[3] = byte(length)
+	contentBytes := content.Bytes()
+	length := len(contentBytes) - 4
+	contentBytes[1] = byte(length >> 16)
+	contentBytes[2] = byte(length >> 8)
+	contentBytes[3] = byte(length)
 
-	return data
+	return &message{
+		contentType: contentTypeHandshake,
+		content:     contentBytes,
+	}
 }
 
 type clientFinished struct {
@@ -155,9 +158,13 @@ func newClientFinished(key []byte, transcript []byte) *clientFinished {
 	}
 }
 
-func (cf *clientFinished) marshal() []byte {
-	var msg bytes.Buffer
-	msg.WriteByte(handshakeTypeFinished)
-	msg.Write(marshalVector(3, cf.verifyData))
-	return msg.Bytes()
+func (cf *clientFinished) marshal() *message {
+	var content bytes.Buffer
+	content.WriteByte(handshakeTypeFinished)
+	content.Write(marshalVector(3, cf.verifyData))
+
+	return &message{
+		contentType: contentTypeHandshake,
+		content:     content.Bytes(),
+	}
 }

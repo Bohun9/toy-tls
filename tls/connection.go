@@ -130,7 +130,7 @@ func (c *Conn) sendClientHello() error {
 	msg := clientHello.marshal()
 
 	if _, err := c.writeMessage(msg); err != nil {
-		return fmt.Errorf("send Client Hello: %w", err)
+		return fmt.Errorf("write Client Hello: %w", err)
 	}
 
 	c.addToTranscript(msg.content)
@@ -253,7 +253,7 @@ func (c *Conn) sendClientFinished() error {
 	msg := clientFinished.marshal()
 
 	if _, err := c.writeMessage(msg); err != nil {
-		return fmt.Errorf("send Client Finished: %w", err)
+		return fmt.Errorf("write Client Finished: %w", err)
 	}
 
 	c.logger.Printf("Client Finished sent:\n%+v\n\n", clientFinished)
@@ -300,7 +300,7 @@ func (c *Conn) sendApplicationData(data []byte) (int, error) {
 
 	n, err := c.writeMessage(msg)
 	if err != nil {
-		return n, fmt.Errorf("send Application Data: %w", err)
+		return n, fmt.Errorf("write Application Data: %w", err)
 	}
 
 	c.logger.Printf("Application Data sent (%v bytes)\n\n", len(data))

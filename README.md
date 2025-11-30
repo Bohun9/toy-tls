@@ -8,8 +8,6 @@ It demonstrates the core TLS handshake, key derivation, and message exchange.
 - Single cryptographic suite: `TLS_AES_128_GCM_SHA256` with `ECDSA_SECP256R1_SHA256`  
 - Standard handshake (no client certificates)  
 - Server certificate verification  
-- Handshake and application key derivation  
-- Logging of messages
 - Message fragmentation
 
 ### Not implemented

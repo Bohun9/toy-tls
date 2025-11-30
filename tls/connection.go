@@ -20,8 +20,8 @@ type handshakeState struct {
 	serverCert  *x509.Certificate
 }
 
-func (hs *handshakeState) addToTranscript(content []byte) {
-	hs.transcript = append(hs.transcript, content...)
+func (hs *handshakeState) addToTranscript(data []byte) {
+	hs.transcript = append(hs.transcript, data...)
 }
 
 type Conn struct {
@@ -121,8 +121,8 @@ func (c *Conn) writeMessage(msg *message) (int, error) {
 	return c.messageLayer.writeMessage(msg)
 }
 
-func (c *Conn) addToTranscript(content []byte) {
-	c.hs.addToTranscript(content)
+func (c *Conn) addToTranscript(data []byte) {
+	c.hs.addToTranscript(data)
 }
 
 func (c *Conn) sendClientHello() error {

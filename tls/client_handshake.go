@@ -144,7 +144,7 @@ type clientFinished struct {
 	verifyData []byte
 }
 
-func (cf *clientFinished) String() string {
+func (cf clientFinished) String() string {
 	return fmt.Sprintf(
 		`clientFinished {
     verifyData: %x
@@ -152,13 +152,13 @@ func (cf *clientFinished) String() string {
 		cf.verifyData)
 }
 
-func newClientFinished(key []byte, transcript []byte) *clientFinished {
-	return &clientFinished{
+func newClientFinished(key []byte, transcript []byte) clientFinished {
+	return clientFinished{
 		verifyData: computeVerifyData(key, transcript),
 	}
 }
 
-func (cf *clientFinished) marshal() *message {
+func (cf clientFinished) marshal() *message {
 	var content bytes.Buffer
 	content.WriteByte(handshakeTypeFinished)
 	content.Write(marshalVector(3, cf.verifyData))

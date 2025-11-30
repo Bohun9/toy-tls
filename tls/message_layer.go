@@ -11,13 +11,6 @@ type message struct {
 	content     []byte
 }
 
-func newMessage(contentType uint8, content []byte) *message {
-	return &message{
-		contentType: contentType,
-		content:     content,
-	}
-}
-
 // handles message fragmentation
 type messageLayer interface {
 	readMessage() (*message, error)
@@ -50,7 +43,7 @@ func (ml *messageLayerImpl) appendFragment() error {
 	}
 
 	if record.contentType != contentTypeHandshake {
-		return fmt.Errorf("received record type 0x%04x, expected handshake", record.contentType)
+		return fmt.Errorf("expected handshake message, got 0x%02x", record.contentType)
 	}
 
 	ml.fragmentBuf.Write(record.fragment)
@@ -74,7 +67,10 @@ func (ml *messageLayerImpl) readMessage() (*message, error) {
 		}
 
 		if record.contentType != contentTypeHandshake {
-			return newMessage(record.contentType, record.fragment), nil
+			return &message{
+				contentType: record.contentType,
+				content:     record.fragment,
+			}, nil
 		}
 		ml.fragmentBuf.Write(record.fragment)
 	}
@@ -88,18 +84,20 @@ func (ml *messageLayerImpl) readMessage() (*message, error) {
 		panic(err)
 	}
 
-	handshakeLen := int(header[1])<<16 + int(header[2])<<8 + int(header[3])
-	if err := ml.extendFragmentBuffer(handshakeLen); err != nil {
+	payloadLen := int(header[1])<<16 + int(header[2])<<8 + int(header[3])
+	if err := ml.extendFragmentBuffer(payloadLen); err != nil {
 		return nil, err
 	}
 
-	payload := make([]byte, handshakeLen)
+	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(&ml.fragmentBuf, payload); err != nil {
 		panic(err)
 	}
 
-	content := append(header, payload...)
-	return newMessage(contentTypeHandshake, content), nil
+	return &message{
+		contentType: contentTypeHandshake,
+		content:     append(header, payload...),
+	}, nil
 }
 
 func (ml *messageLayerImpl) writeMessage(message *message) (int, error) {
@@ -108,7 +106,10 @@ func (ml *messageLayerImpl) writeMessage(message *message) (int, error) {
 
 	for len(content) > 0 {
 		chunkSize := min(len(content), maxRecordSize)
-		record := newRecord(message.contentType, content[:chunkSize])
+		record := &record{
+			contentType: message.contentType,
+			fragment:    content[:chunkSize],
+		}
 
 		if err := ml.recordLayer.writeRecord(record); err != nil {
 			return total, err

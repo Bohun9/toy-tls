@@ -74,8 +74,8 @@ func (ek *encryptionKeys) encrypt(plaintext []byte, ad []byte) []byte {
 
 type trafficKeys struct {
 	secret []byte
-	client encryptionKeys
-	server encryptionKeys
+	client *encryptionKeys
+	server *encryptionKeys
 }
 
 func (tk trafficKeys) String() string {
@@ -85,8 +85,8 @@ func (tk trafficKeys) String() string {
     server: %v
 }`,
 		tk.secret,
-		&tk.client,
-		&tk.server,
+		tk.client,
+		tk.server,
 	)
 }
 
@@ -116,12 +116,12 @@ func deriveSecret(secret []byte, label string, transcript []byte) []byte {
 	return hkdfExpandLabel(secret, label, transcriptHash[:], hashLen)
 }
 
-func deriveWriteKeys(secret []byte) encryptionKeys {
+func deriveEncryptionKeys(secret []byte) *encryptionKeys {
 	key := hkdfExpandLabel(secret, "key", nil, keyLen)
 	iv := hkdfExpandLabel(secret, "iv", nil, ivLen)
 	fin := hkdfExpandLabel(secret, "finished", nil, hashLen)
 
-	return encryptionKeys{
+	return &encryptionKeys{
 		key:      key,
 		iv:       iv,
 		finished: fin,
@@ -129,7 +129,7 @@ func deriveWriteKeys(secret []byte) encryptionKeys {
 	}
 }
 
-func computeHandshakeKeys(privKey *ecdh.PrivateKey, peerPubBytes, transcript []byte) trafficKeys {
+func deriveHandshakeTraffic(privKey *ecdh.PrivateKey, peerPubBytes, transcript []byte) trafficKeys {
 	curve := privKey.Curve()
 	peerPubKey, err := curve.NewPublicKey(peerPubBytes)
 	if err != nil {
@@ -152,12 +152,12 @@ func computeHandshakeKeys(privKey *ecdh.PrivateKey, peerPubBytes, transcript []b
 
 	return trafficKeys{
 		secret: handshakeSecret,
-		client: deriveWriteKeys(clientHsSecret),
-		server: deriveWriteKeys(serverHsSecret),
+		client: deriveEncryptionKeys(clientHsSecret),
+		server: deriveEncryptionKeys(serverHsSecret),
 	}
 }
 
-func computeApplicationKeys(handshakeSecret []byte, transcript []byte) trafficKeys {
+func deriveApplicationTraffic(handshakeSecret []byte, transcript []byte) trafficKeys {
 	zeroSecret := make([]byte, hashLen)
 	derivedSalt := deriveSecret(handshakeSecret, "derived", nil)
 
@@ -167,8 +167,8 @@ func computeApplicationKeys(handshakeSecret []byte, transcript []byte) trafficKe
 
 	return trafficKeys{
 		secret: masterSecret,
-		client: deriveWriteKeys(clientAppSecret),
-		server: deriveWriteKeys(serverAppSecret),
+		client: deriveEncryptionKeys(clientAppSecret),
+		server: deriveEncryptionKeys(serverAppSecret),
 	}
 }
 

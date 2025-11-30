@@ -20,8 +20,8 @@ type handshakeState struct {
 	serverCert  *x509.Certificate
 }
 
-func (s *handshakeState) addToTranscript(content []byte) {
-	s.transcript = append(s.transcript, content...)
+func (hs *handshakeState) addToTranscript(content []byte) {
+	hs.transcript = append(hs.transcript, content...)
 }
 
 type Conn struct {
@@ -71,31 +71,33 @@ func (c *Conn) connected() bool {
 	return c.hs == nil
 }
 
-// handles async messages
 func (c *Conn) readMessage() (*message, error) {
 	msg, err := c.messageLayer.readMessage()
 	if err != nil {
 		return nil, err
 	}
 
-	if msg.contentType == contentTypeAlert {
+	// handles async messages
+	switch msg.contentType {
+	case contentTypeAlert:
 		alertDescription := msg.content[1]
+		c.logger.Printf("Alert received: 0x%02x\n\n", alertDescription)
 		return nil, fmt.Errorf("received alert: 0x%02x", alertDescription)
-	}
 
-	if msg.contentType == contentTypeChangeCipherSpec {
+	case contentTypeChangeCipherSpec:
 		c.logger.Printf("Server Change Cipher Spec received\n\n")
 		return c.readMessage()
-	}
 
-	if msg.contentType == contentTypeHandshake && c.connected() {
-		handshakeType := msg.content[0]
-		switch handshakeType {
-		case handshakeTypeNewSessionTicket:
-			c.logger.Printf("New Session Ticket received\n\n")
-			return c.readMessage()
-		default:
-			return nil, fmt.Errorf("unsupported post-handshake message: 0x%02x", handshakeType)
+	case contentTypeHandshake:
+		if c.connected() {
+			handshakeType := msg.content[0]
+			switch handshakeType {
+			case handshakeTypeNewSessionTicket:
+				c.logger.Printf("New Session Ticket received\n\n")
+				return c.readMessage()
+			default:
+				return nil, fmt.Errorf("unsupported post-handshake message: 0x%02x", handshakeType)
+			}
 		}
 	}
 
@@ -115,7 +117,7 @@ func (c *Conn) readHandshakeMessage() ([]byte, error) {
 	}
 }
 
-func (c *Conn) sendMessage(msg *message) (int, error) {
+func (c *Conn) writeMessage(msg *message) (int, error) {
 	return c.messageLayer.writeMessage(msg)
 }
 
@@ -127,7 +129,7 @@ func (c *Conn) sendClientHello() error {
 	clientHello := newClientHello(c.hs.hostname, c.hs.privKey)
 	msg := clientHello.marshal()
 
-	if _, err := c.sendMessage(msg); err != nil {
+	if _, err := c.writeMessage(msg); err != nil {
 		return fmt.Errorf("send Client Hello: %w", err)
 	}
 
@@ -154,18 +156,18 @@ func (c *Conn) receiveServerHello() error {
 }
 
 func (c *Conn) calculateHandshakeKeys() {
-	hsKeys := computeHandshakeKeys(c.hs.privKey, c.hs.serverHello.pubBytes, c.hs.transcript)
-	c.recordLayer.updateKeys(&hsKeys)
+	hsKeys := deriveHandshakeTraffic(c.hs.privKey, c.hs.serverHello.pubBytes, c.hs.transcript)
+	c.recordLayer.updateKeys(hsKeys)
 
 	c.hs.keys = hsKeys
-	c.logger.Printf("Handshake keys calculated:\n%v\n\n", hsKeys)
+	c.logger.Printf("Handshake Keys calculated:\n%v\n\n", hsKeys)
 }
 
 func (c *Conn) calculateApplicationKeys() {
-	appKeys := computeApplicationKeys(c.hs.keys.secret, c.hs.transcript)
-	c.recordLayer.updateKeys(&appKeys)
+	appKeys := deriveApplicationTraffic(c.hs.keys.secret, c.hs.transcript)
+	c.recordLayer.updateKeys(appKeys)
 
-	c.logger.Printf("Application keys calculated:\n%v\n\n", appKeys)
+	c.logger.Printf("Application Keys calculated:\n%v\n\n", appKeys)
 }
 
 func (c *Conn) receiveEncryptedExtensions() error {
@@ -250,7 +252,7 @@ func (c *Conn) sendClientFinished() error {
 	clientFinished := newClientFinished(c.hs.keys.client.finished, c.hs.transcript)
 	msg := clientFinished.marshal()
 
-	if _, err := c.sendMessage(msg); err != nil {
+	if _, err := c.writeMessage(msg); err != nil {
 		return fmt.Errorf("send Client Finished: %w", err)
 	}
 
@@ -291,9 +293,12 @@ func (c *Conn) handshake() error {
 }
 
 func (c *Conn) sendApplicationData(data []byte) (int, error) {
-	msg := newMessage(contentTypeApplicationData, data)
+	msg := &message{
+		contentType: contentTypeApplicationData,
+		content:     data,
+	}
 
-	n, err := c.sendMessage(msg)
+	n, err := c.writeMessage(msg)
 	if err != nil {
 		return n, fmt.Errorf("send Application Data: %w", err)
 	}

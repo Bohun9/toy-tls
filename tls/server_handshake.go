@@ -137,7 +137,7 @@ type certificateVerify struct {
 	signature []byte
 }
 
-func (cv *certificateVerify) String() string {
+func (cv certificateVerify) String() string {
 	return fmt.Sprintf(
 		`certificateVerfiy{
     algorithm: 0x%04x
@@ -148,9 +148,9 @@ func (cv *certificateVerify) String() string {
 	)
 }
 
-func parseCertificateVerify(content []byte) (*certificateVerify, error) {
+func parseCertificateVerify(content []byte) (certificateVerify, error) {
 	r := bytes.NewReader(content)
-	cv := &certificateVerify{}
+	cv := certificateVerify{}
 
 	skipBytes(r, 4)
 	cv.algorithm = readUint16(r)
@@ -163,7 +163,7 @@ type serverFinished struct {
 	verifyData []byte
 }
 
-func (sf *serverFinished) String() string {
+func (sf serverFinished) String() string {
 	return fmt.Sprintf(
 		`serverFinished {
     verifyData: %x
@@ -171,9 +171,9 @@ func (sf *serverFinished) String() string {
 		sf.verifyData)
 }
 
-func parseServerFinished(content []byte) (*serverFinished, error) {
+func parseServerFinished(content []byte) (serverFinished, error) {
 	r := bytes.NewReader(content)
-	sf := &serverFinished{}
+	sf := serverFinished{}
 
 	skipBytes(r, 4)
 	sf.verifyData = readBytes(r, hashLen)
@@ -181,7 +181,7 @@ func parseServerFinished(content []byte) (*serverFinished, error) {
 	return sf, nil
 }
 
-func (sf *serverFinished) verify(finishedKey []byte, transcript []byte) error {
+func (sf serverFinished) verify(finishedKey []byte, transcript []byte) error {
 	expected := computeVerifyData(finishedKey, transcript)
 	if !bytes.Equal(sf.verifyData, expected) {
 		return fmt.Errorf("bad verify data")

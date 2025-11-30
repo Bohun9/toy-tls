@@ -21,13 +21,6 @@ type record struct {
 	fragment    []byte
 }
 
-func newRecord(contentType uint8, fragment []byte) *record {
-	return &record{
-		contentType: contentType,
-		fragment:    fragment,
-	}
-}
-
 func (r *record) header() []byte {
 	return marshalRecordHeader(r.contentType, uint16(len(r.fragment)))
 }
@@ -65,13 +58,16 @@ func (r *record) encrypt(keys *encryptionKeys) *record {
 	ciphertextHeader := marshalRecordHeader(contentTypeApplicationData, uint16(encryptedRecordLen))
 
 	encryptedRecord := keys.encrypt(innerPlaintext.Bytes(), ciphertextHeader)
-	return newRecord(contentTypeApplicationData, encryptedRecord)
+	return &record{
+		contentType: contentTypeApplicationData,
+		fragment:    encryptedRecord,
+	}
 }
 
 type recordLayer interface {
 	readRecord() (*record, error)
 	writeRecord(*record) error
-	updateKeys(*trafficKeys)
+	updateKeys(trafficKeys)
 }
 
 type recordLayerImpl struct {
@@ -82,15 +78,13 @@ type recordLayerImpl struct {
 
 func newRecordLayerImpl(conn net.Conn) *recordLayerImpl {
 	return &recordLayerImpl{
-		conn:      conn,
-		writeKeys: nil,
-		readKeys:  nil,
+		conn: conn,
 	}
 }
 
-func (rl *recordLayerImpl) updateKeys(tk *trafficKeys) {
-	rl.writeKeys = &tk.client
-	rl.readKeys = &tk.server
+func (rl *recordLayerImpl) updateKeys(tk trafficKeys) {
+	rl.writeKeys = tk.client
+	rl.readKeys = tk.server
 }
 
 func (rl *recordLayerImpl) readRawRecord() (*record, error) {

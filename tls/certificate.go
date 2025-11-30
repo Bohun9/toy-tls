@@ -28,7 +28,7 @@ func validateCertificateChain(chain []*x509.Certificate, domainName string) ([]*
 	return chains[0], nil
 }
 
-func verifyCertificateVerify(cv *certificateVerify, cert *x509.Certificate, transcript []byte) error {
+func verifyCertificateVerify(cv certificateVerify, cert *x509.Certificate, transcript []byte) error {
 	transcriptHash := sha256.Sum256(transcript)
 
 	var content bytes.Buffer
